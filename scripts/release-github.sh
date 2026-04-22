@@ -7,6 +7,7 @@ PROJECT_FILE="${REPO_ROOT}/ComPortsTool.csproj"
 PROJECT_NAME="com-ports"
 CONFIGURATION="Release"
 ARTIFACTS_DIR="${REPO_ROOT}/artifacts"
+RUNTIME_IDENTIFIER="win-x64"
 
 usage() {
   cat <<'EOF'
@@ -26,9 +27,9 @@ Behavior:
   - creates a commit "Release vX.Y.Z"
   - creates annotated tag "vX.Y.Z"
   - pushes branch and tag
-  - publishes the release artifact for the current version
+  - publishes a Windows win-x64 release artifact for the current version
   - zips the publish output
-  - creates a GitHub release and uploads the ZIP
+  - creates or updates a GitHub release and uploads the ZIP
 EOF
 }
 
@@ -133,23 +134,43 @@ ensure_gh_authenticated() {
   gh auth status >/dev/null 2>&1 || fail "GitHub CLI is not authenticated. Run: gh auth login"
 }
 
+release_exists() {
+  local tag_name="$1"
+  gh release view "$tag_name" >/dev/null 2>&1
+}
+
+delete_legacy_release_asset_if_present() {
+  local tag_name="$1"
+  local legacy_asset_name="${PROJECT_NAME}-${tag_name}.zip"
+  local legacy_asset_id
+
+  legacy_asset_id="$(gh release view "$tag_name" --json assets --jq ".assets[] | select(.name == \"${legacy_asset_name}\") | .apiUrl | split(\"/\") | last" 2>/dev/null || true)"
+
+  if [[ -n "${legacy_asset_id}" ]]; then
+    gh api -X DELETE "repos/{owner}/{repo}/releases/assets/${legacy_asset_id}" >/dev/null
+  fi
+}
+
 create_release_artifact() {
   local version="$1"
   local tag_name="v${version}"
-  local publish_dir="${ARTIFACTS_DIR}/publish/${PROJECT_NAME}-${version}"
-  local zip_path="${ARTIFACTS_DIR}/${PROJECT_NAME}-${tag_name}.zip"
+  local publish_dir="${ARTIFACTS_DIR}/publish/${PROJECT_NAME}-${version}-${RUNTIME_IDENTIFIER}"
+  local zip_path="${ARTIFACTS_DIR}/${PROJECT_NAME}-${tag_name}-${RUNTIME_IDENTIFIER}.zip"
 
   rm -rf "$publish_dir"
   mkdir -p "$publish_dir" "$ARTIFACTS_DIR"
 
   dotnet publish "$PROJECT_FILE" \
     -c "$CONFIGURATION" \
+    -r "$RUNTIME_IDENTIFIER" \
     --self-contained false \
     -p:Version="$version" \
     -p:AssemblyVersion="${version}.0" \
     -p:FileVersion="${version}.0" \
     -p:InformationalVersion="$version" \
     -o "$publish_dir" >&2
+
+  [[ -f "${publish_dir}/${PROJECT_NAME}.exe" ]] || fail "Expected Windows executable not found: ${publish_dir}/${PROJECT_NAME}.exe"
 
   rm -f "$zip_path"
   (
@@ -160,26 +181,38 @@ create_release_artifact() {
   echo "$zip_path"
 }
 
-create_github_release() {
+upsert_github_release() {
   local version="$1"
   local tag_name="v${version}"
   local artifact_path="$2"
   local notes_file="${ARTIFACTS_DIR}/release-notes-${tag_name}.md"
+  local asset_name
+  asset_name="$(basename "$artifact_path")"
 
   cat >"$notes_file" <<EOF
 Release ${tag_name}
 
 Artifact:
-- ${PROJECT_NAME}-${tag_name}.zip
+- ${PROJECT_NAME}-${tag_name}-${RUNTIME_IDENTIFIER}.zip
 
 Versione tool:
 - ${version}
+
+Target:
+- Windows ${RUNTIME_IDENTIFIER}
 EOF
 
-  gh release create "$tag_name" \
-    "$artifact_path" \
-    --title "$tag_name" \
-    --notes-file "$notes_file"
+  if release_exists "$tag_name"; then
+    gh release upload "$tag_name" "$artifact_path" --clobber
+    gh release edit "$tag_name" --title "$tag_name" --notes-file "$notes_file"
+  else
+    gh release create "$tag_name" \
+      "$artifact_path" \
+      --title "$tag_name" \
+      --notes-file "$notes_file"
+  fi
+
+  delete_legacy_release_asset_if_present "$tag_name"
 }
 
 main() {
@@ -235,7 +268,7 @@ main() {
   fi
 
   artifact_path="$(create_release_artifact "$new_version")"
-  create_github_release "$new_version" "$artifact_path"
+  upsert_github_release "$new_version" "$artifact_path"
 
   echo "Release completed: ${tag_name}"
   echo "Artifact: ${artifact_path}"

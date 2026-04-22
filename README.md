@@ -345,9 +345,9 @@ Lo script:
 - crea commit `Release vX.Y.Z`;
 - crea tag annotato `vX.Y.Z`;
 - pusha branch corrente e tag su `origin`;
-- esegue `dotnet publish` framework-dependent con la versione corrente;
+- esegue `dotnet publish -r win-x64 --self-contained false`;
 - crea uno ZIP dell'output pubblicato;
-- crea la GitHub release con l'artifact allegato.
+- crea o aggiorna la GitHub release con l'artifact allegato.
 
 La modalita' `current` non incrementa la versione:
 
@@ -362,12 +362,12 @@ Prerequisiti per lo script:
 - remote `origin` gia' configurata;
 - `gh` autenticato con permessi di release;
 - `dotnet`, `zip`, `python3`, `git` disponibili;
-- accesso normale al publish .NET del progetto.
+- accesso ai runtime pack richiesti da `dotnet publish -r win-x64`.
 
 Artifact generato:
 
 ```text
-artifacts/com-ports-vX.Y.Z.zip
+artifacts/com-ports-vX.Y.Z-win-x64.zip
 ```
 
 ## Possibili estensioni
