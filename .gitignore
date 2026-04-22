@@ -1,0 +1,15 @@
+# Build output
+bin/
+obj/
+
+# IDE/user-local files
+.vs/
+*.user
+*.suo
+
+# OS/editor temp files
+.DS_Store
+Thumbs.db
+*~
+.codex
+resume.sh
