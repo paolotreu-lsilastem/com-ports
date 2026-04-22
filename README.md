@@ -323,7 +323,7 @@ Questa verifica conferma:
 Il repository include uno script Linux per pubblicare una nuova release GitHub:
 
 ```bash
-scripts/release-github.sh [patch|minor|major|X.Y.Z]
+scripts/release-github.sh [patch|minor|major|current|X.Y.Z]
 ```
 
 Se non viene passato alcun argomento, lo script esegue un bump `patch`.
@@ -333,6 +333,7 @@ Esempi:
 ```bash
 scripts/release-github.sh
 scripts/release-github.sh minor
+scripts/release-github.sh current
 scripts/release-github.sh 1.2.0
 ```
 
@@ -347,6 +348,14 @@ Lo script:
 - esegue `dotnet publish` framework-dependent con la versione corrente;
 - crea uno ZIP dell'output pubblicato;
 - crea la GitHub release con l'artifact allegato.
+
+La modalita' `current` non incrementa la versione:
+
+- usa la versione gia' presente in `ComPortsTool.csproj`;
+- richiede che il tag `vX.Y.Z` esista gia';
+- rigenera ZIP e GitHub release per quella versione.
+
+E' utile se un run precedente ha gia' creato commit e tag ma la release e' fallita dopo il push.
 
 Prerequisiti per lo script:
 

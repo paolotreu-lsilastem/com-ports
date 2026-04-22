@@ -11,12 +11,13 @@ ARTIFACTS_DIR="${REPO_ROOT}/artifacts"
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/release-github.sh [patch|minor|major|X.Y.Z]
+  scripts/release-github.sh [patch|minor|major|current|X.Y.Z]
 
 Examples:
   scripts/release-github.sh
   scripts/release-github.sh patch
   scripts/release-github.sh minor
+  scripts/release-github.sh current
   scripts/release-github.sh 1.4.0
 
 Behavior:
@@ -123,6 +124,11 @@ ensure_tag_does_not_exist() {
   fi
 }
 
+ensure_tag_exists() {
+  local tag_name="$1"
+  git rev-parse -q --verify "refs/tags/${tag_name}" >/dev/null || fail "Tag does not exist: ${tag_name}"
+}
+
 ensure_gh_authenticated() {
   gh auth status >/dev/null 2>&1 || fail "GitHub CLI is not authenticated. Run: gh auth login"
 }
@@ -143,12 +149,12 @@ create_release_artifact() {
     -p:AssemblyVersion="${version}.0" \
     -p:FileVersion="${version}.0" \
     -p:InformationalVersion="$version" \
-    -o "$publish_dir"
+    -o "$publish_dir" >&2
 
   rm -f "$zip_path"
   (
     cd "$publish_dir"
-    zip -r "$zip_path" .
+    zip -r "$zip_path" . >&2
   )
 
   echo "$zip_path"
@@ -199,27 +205,34 @@ main() {
   current_version="$(get_current_version)"
   [[ -n "$current_version" ]] || fail "Unable to read current version from ${PROJECT_FILE}"
 
-  new_version="$(next_version "$current_version" "$mode")"
-  validate_version "$new_version"
-
-  if [[ "$new_version" == "$current_version" ]]; then
-    fail "New version equals current version: ${new_version}"
-  fi
-
-  tag_name="v${new_version}"
-  ensure_tag_does_not_exist "$tag_name"
-
   current_branch="$(git rev-parse --abbrev-ref HEAD)"
   [[ "$current_branch" != "HEAD" ]] || fail "Detached HEAD is not supported for release publishing."
 
-  update_version_in_project "$new_version"
+  if [[ "$mode" == "current" ]]; then
+    new_version="$current_version"
+    validate_version "$new_version"
+    tag_name="v${new_version}"
+    ensure_tag_exists "$tag_name"
+  else
+    new_version="$(next_version "$current_version" "$mode")"
+    validate_version "$new_version"
 
-  git add -- "$PROJECT_FILE"
-  git commit -m "Release ${tag_name}"
-  git tag -a "$tag_name" -m "Release ${tag_name}"
+    if [[ "$new_version" == "$current_version" ]]; then
+      fail "New version equals current version: ${new_version}"
+    fi
 
-  git push origin "$current_branch"
-  git push origin "$tag_name"
+    tag_name="v${new_version}"
+    ensure_tag_does_not_exist "$tag_name"
+
+    update_version_in_project "$new_version"
+
+    git add -- "$PROJECT_FILE"
+    git commit -m "Release ${tag_name}"
+    git tag -a "$tag_name" -m "Release ${tag_name}"
+
+    git push origin "$current_branch"
+    git push origin "$tag_name"
+  fi
 
   artifact_path="$(create_release_artifact "$new_version")"
   create_github_release "$new_version" "$artifact_path"
