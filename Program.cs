@@ -1,9 +1,24 @@
 using System.ComponentModel;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Win32;
 using Microsoft.Win32.SafeHandles;
+
+var options = CliOptions.Parse(args);
+
+if (options.ShowHelp)
+{
+    Console.WriteLine(HelpText.Content);
+    return;
+}
+
+if (options.ShowVersion)
+{
+    Console.WriteLine(AppVersion.Current);
+    return;
+}
 
 var result = new EnumerationResult(
     ComPortEnumerator.GetComPorts(),
@@ -13,15 +28,196 @@ var result = new EnumerationResult(
         .ToArray());
 
 Console.OutputEncoding = Encoding.UTF8;
-Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions
+
+switch (options.OutputMode)
 {
-    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-    WriteIndented = false
-}));
+    case OutputMode.Json:
+        Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            WriteIndented = false
+        }));
+        break;
+    case OutputMode.Table:
+        OutputFormatter.WriteTable(result);
+        break;
+    default:
+        OutputFormatter.WriteSimpleList(result);
+        break;
+}
 
 internal sealed record EnumerationResult(string[] Coms, FtdiPortInfo[] Ftdis);
 
 internal sealed record FtdiPortInfo(string Com, string Serial, string? Description);
+
+internal enum OutputMode
+{
+    List,
+    Json,
+    Table
+}
+
+internal sealed record CliOptions(OutputMode OutputMode, bool ShowVersion, bool ShowHelp)
+{
+    public static CliOptions Parse(string[] args)
+    {
+        var outputMode = OutputMode.List;
+        var showVersion = false;
+        var showHelp = false;
+
+        foreach (var arg in args)
+        {
+            switch (arg)
+            {
+                case "--json":
+                case "-j":
+                    outputMode = OutputMode.Json;
+                    break;
+                case "--table":
+                case "-t":
+                    outputMode = OutputMode.Table;
+                    break;
+                case "--list":
+                case "-l":
+                    outputMode = OutputMode.List;
+                    break;
+                case "--version":
+                case "-v":
+                    showVersion = true;
+                    break;
+                case "--help":
+                case "-h":
+                    showHelp = true;
+                    break;
+                default:
+                    throw new ArgumentException($"Unknown argument: {arg}");
+            }
+        }
+
+        return new CliOptions(outputMode, showVersion, showHelp);
+    }
+}
+
+internal static class HelpText
+{
+    public static string Content =>
+        """
+        com-ports
+
+        Usage:
+          com-ports [--list|--json|--table] [--version] [--help]
+
+        Output modes:
+          --list,  -l   Simple human-readable list (default)
+          --json,  -j   JSON object: {coms, ftdis}
+          --table, -t   Human-readable formatted tables
+
+        Other options:
+          --version, -v Show tool version
+          --help,    -h Show this help
+        """;
+}
+
+internal static class OutputFormatter
+{
+    public static void WriteSimpleList(EnumerationResult result)
+    {
+        Console.WriteLine("COM ports:");
+        if (result.Coms.Length == 0)
+        {
+            Console.WriteLine("  (none)");
+        }
+        else
+        {
+            foreach (var com in result.Coms)
+            {
+                Console.WriteLine($"  {com}");
+            }
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("FTDI devices:");
+        if (result.Ftdis.Length == 0)
+        {
+            Console.WriteLine("  (none)");
+            return;
+        }
+
+        foreach (var ftdi in result.Ftdis)
+        {
+            var descriptionSuffix = string.IsNullOrWhiteSpace(ftdi.Description)
+                ? string.Empty
+                : $" | {ftdi.Description}";
+            Console.WriteLine($"  {ftdi.Com} | {ftdi.Serial}{descriptionSuffix}");
+        }
+    }
+
+    public static void WriteTable(EnumerationResult result)
+    {
+        WriteComTable(result.Coms);
+        Console.WriteLine();
+        WriteFtdiTable(result.Ftdis);
+    }
+
+    private static void WriteComTable(string[] coms)
+    {
+        const string header = "COM";
+        var width = Math.Max(header.Length, coms.DefaultIfEmpty(string.Empty).Max(static value => value.Length));
+
+        Console.WriteLine("COM ports");
+        Console.WriteLine($"{header.PadRight(width)}");
+        Console.WriteLine(new string('-', width));
+
+        if (coms.Length == 0)
+        {
+            Console.WriteLine("(none)".PadRight(width));
+            return;
+        }
+
+        foreach (var com in coms)
+        {
+            Console.WriteLine(com.PadRight(width));
+        }
+    }
+
+    private static void WriteFtdiTable(FtdiPortInfo[] ftdis)
+    {
+        const string comHeader = "COM";
+        const string serialHeader = "SERIAL";
+        const string descriptionHeader = "DESCRIPTION";
+
+        var comWidth = Math.Max(comHeader.Length, ftdis.DefaultIfEmpty(new FtdiPortInfo("", "", null)).Max(static item => item.Com.Length));
+        var serialWidth = Math.Max(serialHeader.Length, ftdis.DefaultIfEmpty(new FtdiPortInfo("", "", null)).Max(static item => item.Serial.Length));
+        var descriptionWidth = Math.Max(descriptionHeader.Length, ftdis.DefaultIfEmpty(new FtdiPortInfo("", "", null)).Max(static item => item.Description?.Length ?? 0));
+
+        Console.WriteLine("FTDI devices");
+        Console.WriteLine($"{comHeader.PadRight(comWidth)}  {serialHeader.PadRight(serialWidth)}  {descriptionHeader.PadRight(descriptionWidth)}");
+        Console.WriteLine($"{new string('-', comWidth)}  {new string('-', serialWidth)}  {new string('-', descriptionWidth)}");
+
+        if (ftdis.Length == 0)
+        {
+            Console.WriteLine($"{ "(none)".PadRight(comWidth)}  {"".PadRight(serialWidth)}  {"".PadRight(descriptionWidth)}");
+            return;
+        }
+
+        foreach (var ftdi in ftdis)
+        {
+            Console.WriteLine(
+                $"{ftdi.Com.PadRight(comWidth)}  " +
+                $"{ftdi.Serial.PadRight(serialWidth)}  " +
+                $"{(ftdi.Description ?? string.Empty).PadRight(descriptionWidth)}");
+        }
+    }
+}
+
+internal static class AppVersion
+{
+    public static string Current =>
+        Assembly.GetExecutingAssembly()
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+        ?? Assembly.GetExecutingAssembly().GetName().Version?.ToString()
+        ?? "0.0.0";
+}
 
 internal static class PortNameComparer
 {
