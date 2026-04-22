@@ -27,9 +27,8 @@ Behavior:
   - creates a commit "Release vX.Y.Z"
   - creates annotated tag "vX.Y.Z"
   - pushes branch and tag
-  - publishes a Windows win-x64 release artifact for the current version
-  - zips the publish output
-  - creates or updates a GitHub release and uploads the ZIP
+  - publishes a Windows win-x64 self-contained single-file executable
+  - creates or updates a GitHub release and uploads the .exe
 EOF
 }
 
@@ -141,21 +140,30 @@ release_exists() {
 
 delete_legacy_release_asset_if_present() {
   local tag_name="$1"
-  local legacy_asset_name="${PROJECT_NAME}-${tag_name}.zip"
-  local legacy_asset_id
+  local legacy_asset_name legacy_asset_id
 
-  legacy_asset_id="$(gh release view "$tag_name" --json assets --jq ".assets[] | select(.name == \"${legacy_asset_name}\") | .apiUrl | split(\"/\") | last" 2>/dev/null || true)"
+  for legacy_asset_name in \
+    "${PROJECT_NAME}-${tag_name}.zip" \
+    "${PROJECT_NAME}-${tag_name}-${RUNTIME_IDENTIFIER}.zip"
+  do
+    legacy_asset_id="$(gh release view "$tag_name" --json assets --jq ".assets[] | select(.name == \"${legacy_asset_name}\") | .apiUrl | split(\"/\") | last" 2>/dev/null || true)"
 
-  if [[ -n "${legacy_asset_id}" ]]; then
-    gh api -X DELETE "repos/{owner}/{repo}/releases/assets/${legacy_asset_id}" >/dev/null
-  fi
+    if [[ -n "${legacy_asset_id}" ]]; then
+      gh api -X DELETE "repos/{owner}/{repo}/releases/assets/${legacy_asset_id}" >/dev/null
+    fi
+  done
+}
+
+count_files_in_dir() {
+  local dir="$1"
+  find "$dir" -maxdepth 1 -type f | wc -l | tr -d '[:space:]'
 }
 
 create_release_artifact() {
   local version="$1"
   local tag_name="v${version}"
   local publish_dir="${ARTIFACTS_DIR}/publish/${PROJECT_NAME}-${version}-${RUNTIME_IDENTIFIER}"
-  local zip_path="${ARTIFACTS_DIR}/${PROJECT_NAME}-${tag_name}-${RUNTIME_IDENTIFIER}.zip"
+  local exe_path="${ARTIFACTS_DIR}/${PROJECT_NAME}-${tag_name}-${RUNTIME_IDENTIFIER}.exe"
 
   rm -rf "$publish_dir"
   mkdir -p "$publish_dir" "$ARTIFACTS_DIR"
@@ -163,22 +171,24 @@ create_release_artifact() {
   dotnet publish "$PROJECT_FILE" \
     -c "$CONFIGURATION" \
     -r "$RUNTIME_IDENTIFIER" \
-    --self-contained false \
+    --self-contained true \
     -p:Version="$version" \
     -p:AssemblyVersion="${version}.0" \
     -p:FileVersion="${version}.0" \
     -p:InformationalVersion="$version" \
+    -p:PublishSingleFile=true \
+    -p:EnableCompressionInSingleFile=true \
+    -p:DebugSymbols=false \
+    -p:DebugType=None \
     -o "$publish_dir" >&2
 
   [[ -f "${publish_dir}/${PROJECT_NAME}.exe" ]] || fail "Expected Windows executable not found: ${publish_dir}/${PROJECT_NAME}.exe"
+  [[ "$(count_files_in_dir "$publish_dir")" == "1" ]] || fail "Publish output is not a single-file artifact: ${publish_dir}"
 
-  rm -f "$zip_path"
-  (
-    cd "$publish_dir"
-    zip -r "$zip_path" . >&2
-  )
+  rm -f "$exe_path"
+  cp "${publish_dir}/${PROJECT_NAME}.exe" "$exe_path"
 
-  echo "$zip_path"
+  echo "$exe_path"
 }
 
 upsert_github_release() {
@@ -193,13 +203,14 @@ upsert_github_release() {
 Release ${tag_name}
 
 Artifact:
-- ${PROJECT_NAME}-${tag_name}-${RUNTIME_IDENTIFIER}.zip
+- ${asset_name}
 
 Versione tool:
 - ${version}
 
 Target:
 - Windows ${RUNTIME_IDENTIFIER}
+- Self-contained single-file executable
 EOF
 
   if release_exists "$tag_name"; then
@@ -226,7 +237,6 @@ main() {
   require_command git
   require_command dotnet
   require_command gh
-  require_command zip
   require_command python3
 
   cd "$REPO_ROOT"
